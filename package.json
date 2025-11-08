@@ -1,5 +1,5 @@
 {
-  "name": "baumgame",
+  "name": "babvue",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,6 +9,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@babylonjs/core": "^8.32.1",
+    "@babylonjs/gui": "^8.32.1",
+    "@babylonjs/loaders": "^8.32.2",
+    "@babylonjs/materials": "^8.36.1",
+    "@babylonjs/serializers": "^8.36.1",
+    "proj4": "^2.19.10",
     "vue": "^3.5.22"
   },
   "devDependencies": {
@@ -16,7 +22,7 @@
     "@vitejs/plugin-vue": "^6.0.1",
     "@vue/tsconfig": "^0.8.1",
     "typescript": "~5.9.3",
-    "vite": "^7.1.7",
+    "vite": "^7.1.10",
     "vue-tsc": "^3.1.0"
   }
 }
