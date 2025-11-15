@@ -5,7 +5,8 @@ import {
     FollowCamera, FreeCamera,
     ArcRotateCamera, FlyCamera,
     DirectionalLight,
-    type Nullable
+    type Nullable,
+    PBRMaterial
 } from '@babylonjs/core';
 
 import { ImportMeshAsync, InstancedMesh } from "@babylonjs/core";
@@ -22,15 +23,17 @@ import "@babylonjs/loaders/glTF";
 import { createLeafletTexture, latLonToTileXY } from "./map.ts"
 const groundSize = 512
 const tileSize = 256
-const ngTiles = 1 // neighboring tiles
+const ngTiles = 0 // neighboring tiles
 const USE_UTM32 = true
 const zoom = 13
 const zoomAdjust = USE_UTM32 ? -4 : 0
 
 const mapCenters = {
-  "kaMarkt": { lat: 49.009229, lon: 8.403903 },
-  "kaKunst": { lat: 49.011025, lon: 8.399885 },
-  "kaZoo": { lat: 48.99672, lon: 8.40214 },
+    "kaBaum": { lat: 49.009599, lon: 8.403940 },
+    "kaBaum1": { lat: 49.0113359939117572, lon: 8.4108178263551050 },
+    "kaMarkt": { lat: 49.009229, lon: 8.403903 },
+    "kaKunst": { lat: 49.011025, lon: 8.399885 },
+    "kaZoo": { lat: 48.99672, lon: 8.40214 },
 }
 
 const tileGrid = Array.from({ length: ngTiles * 2 + 1 }, () => Array(ngTiles * 2 + 1).fill(0));
@@ -56,59 +59,87 @@ const disposeEngine = function () {
         engine = null;
         console.log("Engine disposed.");
         // --- Remove keyboard listeners ---
-        window.removeEventListener("keydown", onKeyDown);
-        window.removeEventListener("keyup", onKeyUp);
     }
 }
 
 // helper functions
 // Helper: recursively find first mesh with geometry
 function findFirstMeshWithGeometry(meshes: AbstractMesh[]): Mesh | null {
-  for (const m of meshes) {
-    if (m instanceof Mesh && m.getTotalVertices() > 0) return m;
-  }
-  return null;
+    for (const m of meshes) {
+        if (m instanceof Mesh && m.getTotalVertices() > 0) return m;
+    }
+    return null;
 }
 
 // Load both GLTF models asynchronously
-const loadModel = async (path: string, merge: boolean = false, scene: Scene) => {
-  const result = await ImportMeshAsync(path, scene);
-  // List all animation groups and their frame ranges
-  const ag = result.animationGroups || [];
-  if (ag.length > 0) {
-    ag.forEach(group => {
-      console.log("Animation Group Name:", group.name);
-      console.log("From Frame:", group.from);
-      console.log("To Frame:", group.to);
-      group.stop();
-    });
-    // Find a specific animation group by name
-    const poseName = "HumanArmature|Man_Idle"; // The pose/animation you want
-    const pose = ag.find(g => g.name === poseName);
+const loadModel = async (path: string, merge: boolean = false, scene: Scene, setMaterial = false) => {
+    const result = await ImportMeshAsync(path, scene);
 
-    if (pose) {
-        // Start the pose animation
-        console.log(`Starting animation group ${poseName}`);
-        pose.goToFrame(pose.from);
-        // pose.start(false, 1.0, pose.from, pose.to, false); 
-        // (no loop, normal speed, from start frame to end frame, no loop)
+    // add material if none
+    // result contains:
+    //   result.meshes      → array of loaded meshes
+    //   result.particleSystems, result.skeletons, etc.
+
+    if (setMaterial) {
+        const mat = new PBRMaterial("defaultMat", scene);
+        mat.albedoColor = new Color3(0.8, 0.8, 0.8); // light gray
+        mat.metallic = 0;
+        mat.roughness = 1;
+
+        // apply material only to meshes from this import
+        for (const mesh of result.meshes) {
+            //if (mesh.material) continue;
+            //console.log("Assign material", mesh.name)
+            mesh.material = mat;
+        }
+
+        for (const m of result.meshes) {
+            if (m.material) {
+                m.material.backFaceCulling = false;
+                m.material.alpha = 1.0;
+                m.material.alphaMode = Engine.ALPHA_DISABLE;
+            }
+        }
+    }
+
+    // ----------------------
+
+    // List all animation groups and their frame ranges
+    const ag = result.animationGroups || [];
+    if (ag.length > 0) {
+        ag.forEach(group => {
+            console.log("Animation Group Name:", group.name);
+            console.log("From Frame:", group.from);
+            console.log("To Frame:", group.to);
+            group.stop();
+        });
+        // Find a specific animation group by name
+        const poseName = "HumanArmature|Man_Idle"; // The pose/animation you want
+        const pose = ag.find(g => g.name === poseName);
+
+        if (pose) {
+            // Start the pose animation
+            console.log(`Starting animation group ${poseName}`);
+            pose.goToFrame(pose.from);
+            // pose.start(false, 1.0, pose.from, pose.to, false); 
+            // (no loop, normal speed, from start frame to end frame, no loop)
+        } else {
+            console.log(`Animation group ${poseName} not found.`);
+        }
+    }
+
+    if (merge) {
+        const meshes = result.meshes.filter(mesh => mesh instanceof Mesh && mesh.getTotalVertices() > 0) as Mesh[];
+        if (meshes.length === 0) throw new Error(`No meshes with geometry found in ${path}`);
+        meshes.forEach(mesh => mesh.parent = null);
+        const merged = Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
+        return merged
     } else {
-        console.log(`Animation group ${poseName} not found.`);
-    }   
-  }
-
-  if (merge) {
-    const meshes = result.meshes.filter(mesh => mesh instanceof Mesh && mesh.getTotalVertices() > 0) as Mesh[];
-    if (meshes.length === 0) throw new Error(`No meshes with geometry found in ${path}`);
-    meshes.forEach(mesh => mesh.parent = null);
-    const merged = Mesh.MergeMeshes(meshes, true, true, undefined, false, true);
-    return merged
-  } else {
-    const mesh = findFirstMeshWithGeometry(result.meshes);
-    if (!mesh) throw new Error(`No mesh with geometry found in ${path}`);
-    mesh.parent = null;
-    return mesh
-  }
+        const mesh = findFirstMeshWithGeometry(result.meshes);
+        if (!mesh) throw new Error(`No mesh with geometry found in ${path}`);
+        mesh.parent = null;
+        return mesh
+    }
 };
 
 
@@ -126,7 +157,7 @@ const buildCanvas = async (canvas: HTMLCanvasElement) => {
         throw new Error('Engine creation failed');
     }
     // CreateScene function that creates and return the scene
-    const { scene, camera, birdCam } = await createScene(engine, canvas);
+    const { scene, camera } = await createScene(engine, canvas);
     if (!scene || !camera || !engine.scenes[0]) {
         throw new Error('Scene or Camera creation failed');
     }
@@ -163,9 +194,11 @@ const buildCanvas = async (canvas: HTMLCanvasElement) => {
     (async () => {
         const ground = MeshBuilder.CreateGround("ground", { width: groundSize, height: groundSize }, scene);
 
+        // select location
+        const location = mapCenters.kaBaum
         const gtx = await createLeafletTexture(scene,
             //mapCenters.kaZoo.lat, mapCenters.kaZoo.lon, zoom + zoomAdjust, ngTiles, USE_UTM32);
-            mapCenters.kaMarkt.lat, mapCenters.kaMarkt.lon, zoom + zoomAdjust, ngTiles, USE_UTM32);
+            location.lat, location.lon, zoom + zoomAdjust, ngTiles, USE_UTM32);
         console.log("groundTexture dims", gtx.dims);
 
         const centerTileX = gtx.dims[4];
@@ -199,28 +232,108 @@ const buildCanvas = async (canvas: HTMLCanvasElement) => {
     })();
     // 
     // load a tree
+    //const treeModel = await loadModel("/models/marktplatz3.glb", true, scene, true);
+    //const treeModel = await loadModel("/models/flach.glb", true, scene);
     const treeModel = await loadModel("/models/tree1.glb", true, scene);
     treeModel!.computeWorldMatrix(true);
     const treeBoundingInfo = treeModel!.getBoundingInfo();
+    console.log("Model bbox:", treeBoundingInfo)
     const treeSize = treeBoundingInfo.boundingBox.maximumWorld.subtract(treeBoundingInfo.boundingBox.minimumWorld);
     console.log("Tree model size", treeSize);
     const treeMaxDim = Math.max(treeSize.x, treeSize.y, treeSize.z);
-    const treeTargetSize = 5.0;
+    console.log("Max dim:", treeMaxDim)
+    const treeTargetSize = 20.0;
     const treeScaleFactor = treeTargetSize / treeMaxDim;
-    treeModel!.scaling.scaleInPlace(treeScaleFactor);
+    treeModel!.scaling.scaleInPlace(treeScaleFactor) // new Vector3(.00001,.01,.00001)) // treeScaleFactor);
     // get model's Y position to ensure base is above ground on instances
     const treeBoundingBox = treeModel!.getBoundingInfo().boundingBox;
-    const treeBaseY = treeBoundingBox.minimumWorld.y;
+    const treeBaseY = .01 // treeBoundingBox.minimumWorld.y;
+    treeModel!.position = new Vector3(0, treeBaseY, 0)
 
     if (!treeModel) {
-    console.error("Tree model not found");
-    throw new Error("Tree model not found");
+        console.error("Tree model not found");
+        throw new Error("Tree model not found");
     }
     console.log("Tree model", treeModel);
     treeModel.setEnabled(true);
     treeModel.isVisible = true;
 
+    // load building
+    //const bldModel = await loadModel("/models/marktplatz3.glb", true, scene, true);
+    const bldModel = await loadModel("/models/flach.glb", true, scene,true);
+    const bldBoundingInfo = bldModel!.getBoundingInfo();
+    console.log("Building Model bbox:", bldBoundingInfo)
 
+    // Babylon origin (UTM32 reference point)
+    const REF_EASTING = 456463.942;
+    const REF_NORTHING = 5428482.729;
+
+    // meters → Babylon units
+    const SCALE = 0.1;
+
+    // Converts old UTM-aligned GLB positions into Babylon world space
+    function placeUTMModel(mesh, centerUTM) {
+        console.log("Placing UTM model at:", centerUTM);
+        // UTM coordinate components (from model metadata or bounding box)
+        const easting = centerUTM._x;   // CityJSON X
+        const northing = centerUTM._y;   // CityJSON Y
+        const height = centerUTM._z;   // CityJSON Z (becomes Babylon Y)
+
+        // Step 1: swap Y/Z for Babylon
+        // Step 2: offset relative to reference origin
+        const bx = (easting - REF_EASTING) * SCALE;
+        const bz = (northing - REF_NORTHING) * SCALE;
+
+        // Step 3: flatten base height (Y = 0)
+        const by = 0;
+
+        const bldBoundingInfo = mesh!.getBoundingInfo();
+        console.log("Building Model bbox:", bldBoundingInfo)
+        const bldtreeSize = bldBoundingInfo.boundingBox.maximumWorld.subtract(bldBoundingInfo.boundingBox.minimumWorld);
+        const bldMaxDim = Math.max(bldtreeSize.x, bldtreeSize.y, bldtreeSize.z);
+        const bldTargetSize = 20.0;
+        console.log("Max dim:", bldMaxDim)
+        const bldScaleFactor = bldTargetSize / bldMaxDim;
+        mesh!.scaling.scaleInPlace(bldScaleFactor)
+
+        const newBldBoundingInfo = mesh!.getBoundingInfo();
+        console.log("New building Model bbox:", newBldBoundingInfo)
+
+        // Step 4: apply transform
+        mesh.position = new Vector3(bx, by, bz);
+
+        console.log(`Placed at Babylon coords: (${bx.toFixed(2)}, ${by.toFixed(2)}, ${bz.toFixed(2)})`);
+        console.log("scale", mesh.scaling);
+
+    }
+
+    // placeUTMModel(bldModel, bldBoundingInfo.boundingBox.centerWorld);
+    /**/
+    bldModel!.computeWorldMatrix(true);
+    //const bldBoundingInfo = bldModel!.getBoundingInfo();
+    console.log("Building Model bbox:", bldBoundingInfo)
+    const bldtreeSize = bldBoundingInfo.boundingBox.maximumWorld.subtract(bldBoundingInfo.boundingBox.minimumWorld);
+    console.log("Bld model size", bldtreeSize);
+    const  bldMaxDim = Math.max(bldtreeSize.x, bldtreeSize.y, bldtreeSize.z);
+    console.log("Max dim:", bldMaxDim)
+    const bldTargetSize = 20.0;
+    const bldScaleFactor = bldTargetSize / bldMaxDim;
+    bldModel!.scaling.scaleInPlace(bldScaleFactor) // new Vector3(.00001,.01,.00001)) // treeScaleFactor);
+    // get model's Y position to ensure base is above ground on instances
+    const bldBoundingBox = bldModel!.getBoundingInfo().boundingBox;
+    const bldBaseY = .01 // bldBoundingBox.minimumWorld.y;
+    bldModel!.position = new Vector3(0, bldBaseY, 0)
+    /* */
+
+    if (!bldModel) {
+        console.error("Building model not found");
+        throw new Error("Building model not found");
+    }
+    console.log("Building model", bldModel);
+    bldModel.setEnabled(true);
+    bldModel.isVisible = true;
+
+    // ---------------------
     console.log("Env Texture:", scene.environmentTexture);             // should be a valid environment texture (HDR .env)
     console.log("Tone Mapping Enabled:", scene.imageProcessingConfiguration.toneMappingEnabled); // true if HDR tone mapping active
     // Guard access because scene.getEngine() returns AbstractEngine in types; cast or check before reading isHDR
@@ -258,36 +371,20 @@ const createScene = async function (engine: Engine, canvas: HTMLCanvasElement): 
     (camera as ArcRotateCamera).inertia = 0.9;                       // 🟢 smoothing after movement (0 = immediate)
     (camera as ArcRotateCamera).panningInertia = 0.9;                // 🟢 same for panning
     (camera as ArcRotateCamera).lowerRadiusLimit = 2;                // optional min zoom distance
-    (camera as ArcRotateCamera).upperRadiusLimit = 100;              // optional max zoom distance
+    (camera as ArcRotateCamera).upperRadiusLimit = 5000;              // optional max zoom distance
     // Target the camera to scene origin
     (camera as ArcRotateCamera).setTarget(Vector3.Zero());
 
 
-    // --- Bird’s-eye camera (top-down) ---
-    const birdCam = new FreeCamera("birdCam", new Vector3(0, 50, 0), scene);
-    birdCam.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
-    const halfSizeX = 50;
-    const halfSizeY = 30;
-    birdCam.orthoLeft = -halfSizeX;
-    birdCam.orthoRight = halfSizeX;
-    birdCam.orthoTop = halfSizeY;
-    birdCam.orthoBottom = -halfSizeY;
-    //birdCam.setTarget(Vector3.Zero());
-    birdCam.rotation = new Vector3(Math.PI / 2, 0, 0); // look straight down
-
-
-    //birdCam.rotation.z = Math.PI;      // rotate 180° around Y
-    //birdCam.rotation.y = 0;
 
 
     // Set each camera’s viewport
     // (x, y, width, height) are normalized 0–1
     camera.viewport = new Viewport(0, 0, 1.0, 1.0);          // full screen
     //birdCam.viewport  = new Viewport(.80, 0.88, 0.20, 0.12);  // small upper-right corner
-    birdCam.viewport = new Viewport(.70, 0.80, 0.30, 0.20);  // small upper-right corner
 
     // Add both cameras to scene
-    scene.activeCameras = [camera, birdCam];
+    scene.activeCameras = [camera];
 
 
     /*
@@ -303,6 +400,8 @@ const createScene = async function (engine: Engine, canvas: HTMLCanvasElement): 
 
     const galacticlight = new HemisphericLight('galacticlight', new Vector3(0, 1, 0), scene);
 
+    const newHemiLight = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
+
     galacticlight.intensity = 0.5;
 
     galacticlight.groundColor = new Color3(0.5, 0.5, 1.0);
@@ -316,7 +415,7 @@ const createScene = async function (engine: Engine, canvas: HTMLCanvasElement): 
 
 
 
-    return { scene, camera, birdCam };
+    return { scene, camera };
 }
 
 
